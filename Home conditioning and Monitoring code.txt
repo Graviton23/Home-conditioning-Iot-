@@ -1,0 +1,201 @@
+#include <ESP8266WiFi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+#include "DHT.h"
+#define DHTPIN D4
+#define DHTTYPE DHT11
+#define TEC D3
+#define MIST_MAKER D2
+const int leftForward = D5; 
+const int leftBackward = D6; 
+const int en = D7;
+int measurePin = A0;
+int ledPower = D0;
+int sampleTime = 280;
+int deltaTime = 40;
+int sleepTime = 9680;
+
+float voMeasured = 0;
+float calcVoltage = 0;
+float dustDensity = 0;
+DHT dht(DHTPIN,DHTTYPE);
+
+// WiFi parameters
+#define WLAN_SSID       "Network"
+#define WLAN_PASS       "ABCD"
+
+// Adafruit IO
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  0000
+//Enter the username and key from the Adafruit IO
+#define AIO_USERNAME    "GSSR"
+#define AIO_KEY         "ABCDEFGHIJKLMNOPQRSTUVWXYZ" 
+WiFiClient client;
+
+// Setup the MQTT client class by passing in the WiFi client and MQTT server and login details.
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Publish Temperature = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/Temperature");
+Adafruit_MQTT_Publish Humidity = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/Humidity");
+Adafruit_MQTT_Publish Dustdensity = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/DustDensity");
+Adafruit_MQTT_Publish TemperatureText = Adafruit_MQTT_Publish(&mqtt,AIO_USERNAME "/feeds/Temperature Text");
+Adafruit_MQTT_Publish HumidityText = Adafruit_MQTT_Publish(&mqtt,AIO_USERNAME "/feeds/Humidity Text");
+Adafruit_MQTT_Publish DustdensityText = Adafruit_MQTT_Publish(&mqtt,AIO_USERNAME "/feeds/DustDensity Text");
+void setup() {
+  // put your setup code here, to run once:
+Serial.begin(115200);
+
+pinMode(DHTPIN,OUTPUT);
+pinMode(ledPower,OUTPUT);
+pinMode(leftForward , OUTPUT);
+pinMode(leftBackward , OUTPUT);
+pinMode(rightForward , OUTPUT);
+pinMode(rightBackward , OUTPUT);
+dht.begin();
+delay(10);
+Serial.print(F("Connecting to "));
+  Serial.println(WLAN_SSID);
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(F("."));
+    
+  }
+  Serial.println();
+  Serial.println(F("WiFi connected"));
+  Serial.println(F("IP address: "));
+  Serial.println(WiFi.localIP());
+
+  // connect to adafruit io
+  connect();
+}
+
+void connect() {
+  Serial.print(F("Connecting to Adafruit IO... "));
+  int8_t ret;
+  while ((ret = mqtt.connect()) != 0) {
+    switch (ret) {
+      case 1: Serial.println(F("Wrong protocol")); break;
+      case 2: Serial.println(F("ID rejected")); break;
+      case 3: Serial.println(F("Server unavail")); break;
+      case 4: Serial.println(F("Bad user/pass")); break;
+      case 5: Serial.println(F("Not authed")); break;
+      case 6: Serial.println(F("Failed to subscribe")); break;
+      default: Serial.println(F("Connection failed")); break;
+    }
+
+    if(ret >= 0)
+      mqtt.disconnect();
+
+    Serial.println(F("Retrying connection..."));
+    delay(10000);
+  }
+  Serial.println(F("Adafruit IO Connected!"));
+}
+void loop() {
+    
+    if(! mqtt.ping(3)) {
+    // reconnect to adafruit io
+    if(! mqtt.connected())
+      connect();
+  }
+  
+  // put your main code here, to run repeatedly:
+  delay(1000);
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+    float f = dht.readTemperature(true);
+  float hi = dht.computeHeatIndex(f,h);
+digitalWrite(ledPower,LOW);
+delayMicroseconds(sampleTime);
+
+voMeasured = analogRead(measurePin);
+
+delayMicroseconds(deltaTime);
+digitalWrite(ledPower,HIGH);
+delayMicroseconds(sleepTime);
+calcVoltage = voMeasured * (3.0/1024.0);
+dustDensity = 170 * calcVoltage - 0.1;
+//test 1
+digitalWrite(TEC,HIGH);
+if(dustDensity > 120)
+{
+ digitalWrite(leftForward,HIGH);
+ digitalWrite(leftBackward , LOW);
+}
+
+if(h > 60)
+  {
+    digitalWrite(TEC,HIGH);
+    analogWrite(en,255);
+    digitalWrite(leftForward,HIGH);
+    digitalWrite(leftBackward , LOW);
+  }
+  else
+  {
+    digitalWrite(TEC,LOW);
+  }
+ if(h < 40)
+  {
+    digitalWrite(MIST_MAKER,HIGH);
+    analogWrite(en,255);
+    digitalWrite(leftForward,LOW);
+    digitalWrite(leftBackward , HIGH);
+    
+  }
+  else
+  {
+    digitalWrite(MIST_MAKER,LOW);
+  }
+
+  if(dustDensity < 100 && h < 60 && t < 28)
+  {
+    
+  digitalWrite(leftForward , HIGH);
+  digitalWrite(leftBackward , LOW);
+  // This delay may be adjusted based on the room Dimensions
+  delay(2*60*1000);
+  analogWrite(en,128);
+  digitalWrite(leftForward , LOW);
+  digitalWrite(leftBackward , HIGH);
+  }
+Serial.print("Humidity: "); 
+Serial.print(h);
+Serial.print("\nTemperature: "); 
+Serial.print(t);
+Serial.print(" *C  ");
+Serial.print(f);
+Serial.print(" *F\t");
+Serial.print("\nHeat index: ");
+Serial.print(hi);
+Serial.println(" *F");
+Serial.print(dustDensity);
+Serial.println(" micrograms/metre^3");
+
+if (! Temperature.publish(t)) {                     //Publish to Adafruit
+      Serial.println(F("Temp io Failed"));
+    }
+    else {
+      Serial.println(F("Temperature Sent!"));
+    } 
+if (! Humidity.publish(h)) {                     //Publish to Adafruit
+      Serial.println(F("hum io Failed"));
+    }
+else {
+      Serial.println(F("Humidity Sent!"));
+    }
+
+if(! Dustdensity.publish(dustDensity))
+{
+  Serial.println(F("Dust io Failed"));
+}
+else
+{
+  Serial.println(F("DustDensity Sent!"));
+}
+TemperatureText.publish(t);
+HumidityText.publish(h);
+DustdensityText.publish(dustDensity);
+delay(2000);
+}
